@@ -789,16 +789,22 @@ function hookAudio(el) {
 async function analyzeBlob(blob, passage, mode, trial) {
   state.blobs.latest = blob;
   const text = mode === 'imprompt' ? '' : (passage.text || '');
-  toast('分析中…', 8000);
+  const wantContent = !!($('#contentToggle') && $('#contentToggle').checked);
+  toast(wantContent ? '分析中…（含转写，稍等几秒）' : '分析中…', 20000);
   const q = new URLSearchParams({
     text, title: passage.title || '', mode, target: $('#target').value,
     trial: trial ? '1' : '0',
+    content: wantContent ? '1' : '0',
   });
   const t0 = performance.now();
   const res = await fetch('/api/analyze?' + q.toString(), {
     method: 'POST', body: blob, headers: { 'Content-Type': 'audio/wav' },
   });
-  const data = await res.json();
+  // 超大 body 时服务端可能直接断连，这里兜一下，别显示成 "分析失败：undefined"
+  let data;
+  try { data = await res.json(); } catch (_) {
+    toast('分析失败：服务端返回异常'); return;
+  }
   if (!data.ok) { toast('分析失败：' + (data.error || '未知')); return; }
   toast('分析完成（' + Math.round(performance.now() - t0) + 'ms）');
   const pcm = await decodePcm(await blob.arrayBuffer());
@@ -808,6 +814,30 @@ async function analyzeBlob(blob, passage, mode, trial) {
   renderResult(data, data.id ? `/api/record?id=${data.id}` : '/api/demo');
   if (!data.trial) { state.plan = null; loadPlan(); }
 }
+
+// ---- 内容分析：能力探测 + 报告渲染 ----
+async function loadCapabilities() {
+  try {
+    state.cap = await (await fetch('/api/capabilities')).json();
+  } catch (_) { state.cap = null; return; }
+  const note = $('#capNote');
+  const box = $('#contentToggleWrap');
+  if (!note || !box) return;
+  const a = state.cap.asr || {};
+  if (!a.available) {
+    // 没装 whisper：把开关藏起来，别给用户一个点了必然失败的东西
+    box.style.display = 'none';
+    note.textContent = '内容分析不可用（没装 faster-whisper）';
+    return;
+  }
+  box.style.display = '';
+  const l = state.cap.llm || {};
+  note.textContent = l.configured
+    ? `内容分析：本地转写（音频不出本机）+ 文字发给 ${l.base} 做结构审查`
+    : '内容分析：本地转写（音频不出本机）。没配 LLM，只出统计指标，不做结构审查';
+  note.classList.toggle('warn', !!l.configured);
+}
+
 
 $('#rec').onclick = async () => { if (!state.recording) { try { await startRecording(); } catch (_) {} } };
 $('#stop').onclick = () => { const b = stopRecording(); if (!b) { toast('没有录到声音'); return; } stopAndAnalyze(b); };
@@ -893,6 +923,116 @@ $('#metro').onclick = () => {
 };
 
 // ------------------------------------------------------------------ 报告
+// ---- 内容层报告 ----
+function pushContent(p, c) {
+  const asr = c.asr || {};
+  p.push('<h2>内容分析</h2>');
+
+  if (!c.ok) {
+    p.push(`<div class="drill" style="border-color:#5a4a28;background:#1b1810">
+      <div class="dh"><b style="color:#e8a33d">转写失败</b></div>
+      <ol><li>${esc(c.error || '未知原因')}</li>
+      <li>音频层的分析不受影响，上面的分数照常有效。</li></ol></div>`);
+    return;
+  }
+
+  const st = c.stats || {};
+  const f = st.fillers || {};
+
+  // 隐私提示：发了就说发了，别让用户自己去猜
+  if (c.sent_to_cloud) {
+    p.push(`<p class="dim-note" style="color:#e8a33d">⚠ 本次 ${c.sent_to_cloud.chars} 个字的转写文本已发送到
+      ${esc(c.sent_to_cloud.endpoint || '云端')} 做结构审查。音频本身没有离开本机。</p>`);
+  }
+
+  // 语速自洽性：转写字数推的语速 vs 音频测的语速
+  const rc = c.rate_check;
+  if (rc && rc.trusted === false) {
+    p.push(`<div class="drill" style="border-color:#5a4a28;background:#1b1810;margin-bottom:12px">
+      <div class="dh"><b style="color:#e8a33d">转写可能漏字，内容指标请打折看</b></div>
+      <ol><li>音频测出 ${rc.audio} 字/秒，但转写文字只推出 ${rc.from_text} 字/秒，
+      差 ${(rc.gap_ratio * 100).toFixed(0)}%。</li>
+      <li>差得太多通常是识别漏字（口音、语速快、录音轻）。</li>
+      <li>下面的填充词和重复统计会偏少，别据此下结论。</li></ol></div>`);
+  }
+
+  // 硬指标
+  p.push('<div class="metrics">');
+  const addM = (label, val, warn) => p.push(
+    `<div class="metric"><span>${label}</span><b${warn ? ' style="color:#e8a33d"' : ''}>${val}</b></div>`);
+  addM('转写字数', st.chars ?? '—');
+  addM('填充词总数', f.total ?? 0, (f.total || 0) > 0);
+  addM('填充词/分钟', f.per_min ?? '—', (f.per_min || 0) > 6);
+  addM('实词占比', st.content ? (st.content.ratio * 100).toFixed(0) + '%' : '—');
+  addM('自我重复', (st.repeats || []).length, (st.repeats || []).length > 0);
+  addM('口头禅', (st.catchphrases || []).length, (st.catchphrases || []).length > 0);
+  p.push('</div>');
+
+  // 填充词明细
+  const em = Object.entries(f.empty || {});
+  const cn = Object.entries(f.connect || {});
+  if (em.length || cn.length) {
+    p.push('<h2>填充词明细</h2><div class="metrics">');
+    for (const [w, n] of em) addM('语气词「' + w + '」', n);
+    for (const [w, n] of cn) addM('连接词「' + w + '」', n);
+    p.push('</div>');
+    p.push('<p class="dim-note">语气词（嗯/呃/那个）直接删；连接词（然后/就是）换成半秒停顿，或换成过桥句。</p>');
+  }
+
+  // 重复 / 口头禅
+  if ((st.repeats || []).length) {
+    p.push('<h2>重复表述</h2><ul class="adv">' + st.repeats.slice(0, 6).map((x) =>
+      `<li>「${esc(x.text)}」说了 <b>${x.count}</b> 遍</li>`).join('') + '</ul>');
+  }
+  if ((st.catchphrases || []).length) {
+    p.push('<h2>口头禅</h2><ul class="adv">' + st.catchphrases.slice(0, 6).map((x) =>
+      `<li>「${esc(x.text)}」× ${x.count}</li>`).join('') + '</ul>');
+  }
+
+  // 结构校验（规则层，不需要 AI）
+  const stru = st.structure || {};
+  if (stru.verdict) {
+    p.push(`<h2>结构</h2><ul class="adv"><li>${esc(stru.verdict)}</li></ul>`);
+  }
+
+  // 卡壳点对应的词：把秒数变成"卡在哪个词前面"
+  if (c.stalls_text && c.stalls_text.length) {
+    p.push('<h2>卡在哪个词上</h2><ul class="adv">' + c.stalls_text.slice(0, 8).map((s) =>
+      `<li>${fmt(s.t)} 停了 ${s.dur}s` +
+      (s.next_text ? ` → 卡在「${esc(s.next_text)}」前面` : '') + '</li>').join('') + '</ul>');
+  }
+
+  // LLM 结构审查
+  const rv = c.review || {};
+  if (rv.ok) {
+    if ((rv.contradictions || []).length) {
+      p.push('<h2>前后矛盾</h2><ul class="adv">' + rv.contradictions.map((x) =>
+        `<li>「${esc(x.a)}」 ↔ 「${esc(x.b)}」${x.why ? '：' + esc(x.why) : ''}</li>`).join('') + '</ul>');
+    }
+    if ((rv.unexplained || []).length) {
+      p.push('<h2>说了但没解释</h2><ul class="adv">' + rv.unexplained.map((x) =>
+        `<li>「${esc(x.term || '')}」—— 原句「${esc(x.quote || '')}」</li>`).join('') + '</ul>');
+    }
+    if (rv.structure && rv.structure.verdict) {
+      p.push(`<h2>结构（AI 复核）</h2><ul class="adv"><li>${esc(rv.structure.verdict)}</li></ul>`);
+    }
+    if (rv.dropped) {
+      p.push(`<p class="dim-note">已丢弃 ${rv.dropped} 条引不出原文的结论（推理模型偶尔会编，宁可少说）。</p>`);
+    }
+    if (!(rv.contradictions || []).length && !(rv.unexplained || []).length) {
+      p.push('<p class="dim-note">结构审查没发现可指认的矛盾或未解释的术语。</p>');
+    }
+  } else if (rv.error) {
+    p.push(`<p class="dim-note">结构审查未执行：${esc(rv.error)}</p>`);
+  }
+
+  // 原文：折叠起来，想看再看
+  if (c.transcript) {
+    p.push(`<details class="transcript"><summary>查看转写原文（${(c.transcript || '').length} 字）</summary>
+      <p>${esc(c.transcript)}</p></details>`);
+  }
+}
+
 function renderResult(r, audioUrl) {
   const box = $('#result');
   box.classList.remove('hidden');
@@ -944,7 +1084,9 @@ function renderResult(r, audioUrl) {
   ];
   p.push('<h2>关键指标</h2><div class="metrics">');
   for (const [k, label] of show) {
-    if (m[k] === undefined) continue;
+    // null 也要跳过：即兴模式没有逐字稿，「期望音节数」「音节覆盖率」会是 null。
+    // 以前只挡 undefined，于是页面上会直愣愣显示「期望音节数 null」。
+    if (m[k] === undefined || m[k] === null) continue;
     let v = m[k];
     if (k === '说话占比' || k === '停顿占比' || k === '句末平拖占比' || k === '硬起音比例') {
       v = (v * 100).toFixed(0) + '%';
@@ -982,6 +1124,9 @@ function renderResult(r, audioUrl) {
   if (r.advice && r.advice.length) {
     p.push('<h2>针对性建议</h2><ul class="adv">' + r.advice.map((a) => `<li>${esc(a)}</li>`).join('') + '</ul>');
   }
+
+  // ---- 内容层（只有勾了「内容分析」才有） ----
+  if (r.content) pushContent(p, r.content);
 
   if (r.clauses && r.clauses.length) {
     p.push('<h2>逐句表现</h2><table><thead><tr><th>分句</th><th>字数</th><th>检测</th><th>时长</th><th>语速</th><th>停顿</th></tr></thead><tbody>');
@@ -1149,6 +1294,7 @@ window.addEventListener('resize', () => {
   paintWave();
   await loadPlan();
   await loadCatalog();
+  await loadCapabilities();
   // 首次进入：选中“当前重点”里的第一条，让标题和侧栏筛选保持一致
   const rec = recommendedDims();
   const all = state.catalog.read || [];

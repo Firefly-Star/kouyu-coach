@@ -96,9 +96,15 @@
           <option value="90">90 秒</option>
         </select>
       </label>
+      <!-- 内容分析是可选增强：要本地 whisper 转写，慢几秒，且配了 LLM 时会把文字发到云端。
+           所以做成显式开关，默认关，用户自己想要才打开。 -->
+      <label class="content-toggle" id="contentToggleWrap" title="本地转写成文字，统计填充词/重复/结构。慢几秒">
+        <input type="checkbox" id="contentToggle"> 内容分析
+      </label>
       <span id="clock" class="clock">00:00</span>
     </div>
     <div class="metro-note" id="metroNote"></div>
+    <div class="cap-note" id="capNote"></div>
     <div class="countdown" id="countdown"></div>
 
     <div class="wave-wrap"><canvas id="wave" height="96"></canvas></div>

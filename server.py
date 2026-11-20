@@ -27,6 +27,9 @@ import analyzer  # noqa: E402
 import passages  # noqa: E402
 import plan  # noqa: E402
 import topics  # noqa: E402
+import asr  # noqa: E402
+import content  # noqa: E402
+import llm_review  # noqa: E402
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("KOUYU_PORT", "8899"))
@@ -216,6 +219,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(os.path.join(WEB, "style.css"), "text/css; charset=utf-8")
             if p == "/api/passages":
                 return self._json(200, passages.CATALOG)
+            if p == "/api/capabilities":
+                # 前端据此决定要不要显示「内容分析」按钮。
+                # 缺 whisper 或缺 LLM Key 都不是错误，只是功能降级。
+                return self._json(200, {"asr": asr.status(), "llm": llm_review.status()})
             if p == "/api/daily":
                 # 每日一题：按"今天"取一条，同一天多次打开是同一题。
                 # 允许 ?topic=<id> 直接指定（练完想换一条，或想固定某题反复练）。
@@ -289,11 +296,24 @@ class Handler(BaseHTTPRequestHandler):
             mode = (q.get("mode") or ["read"])[0]
             target = float((q.get("target") or ["4.2"])[0])
             trial = (q.get("trial") or [""])[0] == "1"   # 示例/试听：不写进历史
+            # 内容层要显式请求才跑：它慢（本地 whisper 要几秒）、且可能把文字发到云端，
+            # 不该在用户没预期的时候悄悄发生。
+            want_content = (q.get("content") or [""])[0] == "1"
             result = analyzer.analyze(body, text or None, target_rate=target)
+
             rec_id = time.strftime("%Y%m%d_%H%M%S") + "_%03d" % int((time.time() * 1000) % 1000)
-            if result.get("ok") and not trial:
-                with open(os.path.join(HIST, rec_id + ".wav"), "wb") as f:
+            wav_path = os.path.join(HIST, rec_id + ".wav")
+
+            # 音频先落盘，ASR 需要文件路径（faster-whisper 读文件比读内存高效）
+            if result.get("ok") and (not trial or want_content):
+                with open(wav_path, "wb") as f:
                     f.write(body)
+
+            if want_content and result.get("ok"):
+                result["content"] = _analyze_content(
+                    wav_path, result, mode, allow_cloud=True)
+
+            if result.get("ok") and not trial:
                 payload = {
                     "meta": {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "title": title,
                              "mode": mode, "text": text, "id": rec_id},
@@ -301,6 +321,12 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 with open(os.path.join(HIST, rec_id + ".json"), "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False)
+            elif result.get("ok") and trial and os.path.exists(wav_path):
+                # 试听不写历史，但 ASR 用过的临时 wav 也别留下
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
             result["id"] = None if trial else rec_id
             result["trial"] = trial
             return self._json(200, result)
@@ -309,6 +335,56 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._json(500, {"ok": False,
                                     "error": "分析时出错了（%s），请重录一条再试。" % type(e).__name__})
+
+
+def _analyze_content(wav_path, audio_result, mode, allow_cloud=True):
+    """内容层：转写 → 硬指标 → （可选）LLM 结构审查。
+
+    分三层降级，任何一层失败都不影响其它层：
+      1. 本地 whisper 转写失败 → 只返回错误说明，音频层报告照常
+      2. 转写成功 → 硬指标（填充词/重复/结构）一定能出
+      3. 配了 LLM key → 追加结构审查；没配就跳过，不算错
+    """
+    out = {"asr": asr.status(), "llm": llm_review.status()}
+
+    tr = asr.transcribe(wav_path)
+    if not tr.get("ok"):
+        out["ok"] = False
+        out["error"] = tr.get("error") or "转写失败"
+        return out
+
+    out["ok"] = True
+    out["transcript"] = tr["text"]
+    out["segments"] = tr.get("segments") or []
+    out["duration"] = tr.get("duration")
+
+    # 硬指标：不依赖任何外部服务
+    out["stats"] = content.analyze_text(tr["text"], tr.get("duration"))
+
+    # 卡壳点对应到词：把"第 4.57 秒停了一下"变成"在『但不值得』前面卡住了"
+    if audio_result.get("stalls"):
+        out["stalls_text"] = asr.align_stalls(audio_result["stalls"], out["segments"])
+
+    # 语速自洽性检查：转写字数推出的语速 vs 音频层测的语速。
+    # 差太多说明转写漏字严重（或音频时长异常），此时内容层结论要打折看。
+    audio_rate = (audio_result.get("metrics") or {}).get("整体语速_字每秒")
+    stat_rate = (out["stats"] or {}).get("speech_rate")
+    if audio_rate and stat_rate:
+        gap = abs(stat_rate - audio_rate) / max(audio_rate, 1e-3)
+        out["rate_check"] = {"audio": audio_rate, "from_text": stat_rate,
+                             "gap_ratio": round(gap, 3), "trusted": gap < 0.35}
+
+    # LLM 结构审查：配了才跑
+    if allow_cloud and llm_review.configured():
+        out["review"] = llm_review.review(
+            tr["text"], tr.get("duration"), mode="即兴" if mode == "imprompt" else "朗读")
+        # 明确告诉用户/前端：这段文字被发出去了
+        out["sent_to_cloud"] = {"chars": len(tr["text"]),
+                                "endpoint": llm_review.status()["base"]}
+    else:
+        out["review"] = {"ok": False, "error": "没有配置 LLM，跳过结构审查"}
+        out["sent_to_cloud"] = None
+    return out
 
 
 class _Server(ThreadingHTTPServer):

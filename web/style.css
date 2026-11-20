@@ -277,3 +277,15 @@ audio{width:100%;height:36px;margin:0 0 12px;filter:invert(.92) hue-rotate(180de
 /* 素材里的重音标记 ‼…‼ 渲染成高亮 */
 .textbox .stress{font-style:normal;color:#ffd166;font-weight:700;border-bottom:2px solid rgba(255,209,102,.45);padding-bottom:1px}
 
+
+/* 内容分析开关 + 能力提示 */
+.content-toggle{font-size:12.5px;color:var(--dim);display:flex;align-items:center;gap:5px;cursor:pointer;
+  padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
+.content-toggle input{margin:0;cursor:pointer}
+.cap-note{font-size:11.5px;color:var(--dim2);min-height:15px;margin:0 0 10px;line-height:1.6}
+.cap-note.warn{color:#c9a35a}
+
+/* 转写原文：默认折叠 */
+details.transcript{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:10px 14px}
+details.transcript summary{cursor:pointer;font-size:12.5px;color:var(--accent2);outline:none}
+details.transcript p{font-size:13.5px;line-height:1.9;color:#cdd8e2;margin:10px 0 0;white-space:pre-wrap}
