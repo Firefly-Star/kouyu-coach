@@ -26,6 +26,7 @@ sys.path.insert(0, HERE)
 import analyzer  # noqa: E402
 import passages  # noqa: E402
 import plan  # noqa: E402
+import topics  # noqa: E402
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("KOUYU_PORT", "8899"))
@@ -205,17 +206,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(os.path.join(WEB, "style.css"), "text/css; charset=utf-8")
             if p == "/api/passages":
                 return self._json(200, passages.CATALOG)
+            if p == "/api/daily":
+                # 每日一题：按"今天"取一条，同一天多次打开是同一题。
+                # 允许 ?topic=<id> 直接指定（练完想换一条，或想固定某题反复练）。
+                q = parse_qs(u.query)
+                want = (q.get("topic") or [""])[0]
+                if want:
+                    hit = next((t for t in topics.ALL_TOPICS if t["id"] == want), None)
+                    if hit is None:
+                        return self._json(404, {"error": "没有这条题目"})
+                    return self._json(200, dict(hit, count=len(topics.ALL_TOPICS)))
+                import datetime
+                day_index = (datetime.date.today() - datetime.date(2026, 1, 1)).days
+                t = topics.todays_topic(day_index)
+                return self._json(200, dict(t, count=len(topics.ALL_TOPICS),
+                                            day=day_index % len(topics.ALL_TOPICS)))
             if p == "/api/plan":
                 prog = plan_progress()
-                dims = []
-                for d in plan.DIMENSIONS:
-                    # 每个维度挂上它第一次出现的阶段门槛，页面上直接显示“目标 ≥ X”
-                    tgt = None
-                    for s in plan.STAGES:
-                        if d["key"] in s["pass"]:
-                            tgt = s["pass"][d["key"]]
-                            break
-                    dims.append(dict(d, target=tgt))
+                # 每个维度挂上它在各阶段里最高的那条验收线，页面显示“目标 ≥ X”。
+                # 这里以前取的是“第一次出现的阶段门槛”，四阶段改过阈值后
+                # 会显示成比实际要求更低的数（比如 flow 显示 63 而第四阶段要 72）。
+                dims = [dict(d, target=plan.dimension_target(d["key"]))
+                        for d in plan.DIMENSIONS]
                 return self._json(200, {
                     "dimensions": dims,
                     "stages": plan.STAGES,

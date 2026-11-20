@@ -15,6 +15,7 @@ const state = {
   view: 'plan', plan: null, catalog: null, current: null,
   recording: false, rec: null, t0: 0, timer: null, blobs: {},
   lastDraw: null, session: null, showAll: false,
+  daily: null, limit: 0, limitHit: false,
 };
 
 const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -54,6 +55,97 @@ async function loadPlan() {
   renderRhythm(state.plan.rhythm);
   if (!state.catalog) await loadCatalog();
   else renderList();
+  await loadDaily();
+}
+
+// ---- 今日一题：每天换一道，可反复练 ----
+async function loadDaily(force) {
+  const box = $('#daily');
+  if (!box) return;
+  try {
+    state.daily = await (await fetch('/api/daily' + (force ? '?topic=' + force : ''))).json();
+  } catch (_) {
+    box.innerHTML = '<p class="dim-note">题目加载失败，刷新试试。</p>';
+    return;
+  }
+  const d = state.daily;
+  box.innerHTML = `
+    <div class="daily-head">
+      <span class="daily-badge">今日</span>
+      <span class="dim-note">${esc(d.shape || '')} · 建议 ${d.seconds} 秒 · 题库 ${d.count} 题</span>
+    </div>
+    <p class="daily-topic">${esc(d.topic)}</p>
+    <div class="daily-actions">
+      <button class="btn primary" id="dailyGo">现在讲这道 →</button>
+      <button class="link" id="dailyNext">换一题</button>
+    </div>`;
+  $('#dailyGo').onclick = () => startDaily();
+  $('#dailyNext').onclick = async () => {
+    // 换一题：拿当前 id 往后推一条（服务端按天取模，这里靠递增 day 实现）
+    const nextDay = ((state.daily.day || 0) + 1) % (state.daily.count || 39);
+    state.daily = await (await fetch('/api/daily')).json();
+    // 直接顺序取：用 count 里推不出来的时候退回按天
+    const r = await (await fetch('/api/daily')).json();
+    if (r.id === state.daily.id) {
+      // 同一天反复点：本地轮转一条，避免"换一题"看起来没反应
+      const all = (state.catalog && state.catalog.imprompt) || [];
+      if (all.length) { toast('今日题目已是最新，可从左侧「即兴」选其它题'); }
+    }
+    renderDailyById((state.daily.id !== r.id) ? state.daily : r);
+  };
+  // 把建议时限同步到练习页的限时选择
+  const sel = $('#timelimit');
+  if (sel && d.seconds) {
+    const opt = [...sel.options].find((o) => o.value === String(d.seconds));
+    if (opt) sel.value = String(d.seconds);
+  }
+}
+
+function renderDailyById(d) {
+  const box = $('#daily');
+  if (!box || !d) return;
+  box.innerHTML = `
+    <div class="daily-head">
+      <span class="daily-badge">今日</span>
+      <span class="dim-note">${esc(d.shape || '')} · 建议 ${d.seconds} 秒 · 题库 ${d.count} 题</span>
+    </div>
+    <p class="daily-topic">${esc(d.topic)}</p>
+    <div class="daily-actions">
+      <button class="btn primary" id="dailyGo">现在讲这道 →</button>
+      <button class="link" id="dailyNext">换一题</button>
+    </div>`;
+  $('#dailyGo').onclick = () => startDaily();
+  $('#dailyNext').onclick = () => {
+    const all = state.catalog && state.catalog.imprompt;
+    if (!all || !all.length) return;
+    const i = all.findIndex((x) => x.id === d.id);
+    const nxt = all[(i + 1) % all.length];
+    renderDailyById({ id: nxt.id, topic: nxt.topic || nxt.text, seconds: nxt.seconds || 60,
+                      shape: nxt.shape || '', count: d.count || all.length, _p: nxt });
+  };
+}
+
+// 从「今日一题」直接进练习页：不用逐字稿，走即兴模式
+function startDaily() {
+  const d = state.daily;
+  if (!d) return;
+  // 走 selectPassage 而不是自己手写一遍 DOM 操作：
+  // 两处都手动设置的话，"即兴"标记、prompt 样式、限时同步这三件事
+  // 必然会在其中一处漏掉（第一版就漏了 prompt 样式）。
+  const p = {
+    id: d._p ? d._p.id : d.id,
+    title: '今日一题',
+    text: '',
+    task: d.topic,
+    focus: (d.shape ? d.shape + ' · ' : '') + '限时 ' + d.seconds + ' 秒',
+    tips: '开口前先想 3 个关键词。限时到了会自动停止并分析。',
+    imprompt: true,
+    seconds: d.seconds,
+  };
+  state.session = null;
+  goto('practice');
+  selectPassage(p);
+  $('#crumb').textContent = '今日一题 / 即兴';
 }
 
 function renderPlanHero(p) {
@@ -105,13 +197,23 @@ function renderDims(dims, prog, target) {
 function renderStages(stages, prog) {
   const cur = prog && prog.current_stage;
   const last = (prog && prog.last) || {};
-  $('#stages').innerHTML = stages.map((s, i) => {
+  // 服务端现在会给每个阶段独立结论（prog.stages），用它而不是本地重算，
+  // 保证「页面显示」和「阶段判定」永远是同一套逻辑。
+  const rows = {};
+  for (const r of (prog && prog.stages) || []) rows[r.id] = r;
+
+  $('#stages').innerHTML = stages.map((s) => {
     const isCur = s.id === cur;
-    const passed = s.pass && Object.entries(s.pass).every(([k, t]) => (last[k] || 0) >= t);
+    const row = rows[s.id];
+    const passed = row ? row.passed
+      : !!(s.pass && Object.entries(s.pass).every(([k, t]) => (last[k] || 0) >= t));
     const chips = (s.focus || []).map((k) => `<span class="fchip">${DIM_LABEL[k] || k}</span>`).join('');
     const sess = (s.sessions || []).map((x) => `
       <div class="sessrow">
         <span class="nm">${esc(x.name)}</span>
+        ${x.check === 'self'
+          ? '<span class="chk self" title="工具测不了这条，靠你自己对照">自查</span>'
+          : '<span class="chk auto" title="这条工具会帮你验">可验</span>'}
         <span class="min">${x.minutes} 分钟</span>
         <button class="go" data-sess="${esc(x.id)}">练这个 →</button>
       </div>`).join('');
@@ -124,7 +226,7 @@ function renderStages(stages, prog) {
       <div class="sh">
         <h3>${esc(s.name)}</h3>
         <span class="weeks">${esc(s.weeks)}</span>
-        ${isCur ? '<span class="stage-chip">当前</span>' : ''}
+        ${isCur ? '<span class="stage-chip">建议主攻</span>' : ''}
         ${passed ? '<span class="stage-chip" style="color:#7ed0a8">已达标</span>' : ''}
       </div>
       <p class="goal">${esc(s.goal)}</p>
@@ -210,21 +312,43 @@ function openPassageById(pid) {
   if (p) selectPassage(p);
 }
 
+// 把素材里的重音标记 ‼…‼ 渲染成高亮，而不是把符号原样显示给用户。
+// 服务端已经提供了去掉标记的 text，这里优先用 text_raw 才能保住标记位置。
+function renderMarkedText(box, p) {
+  const raw = p.text_raw || '';
+  if (!raw || raw.indexOf('‼') < 0) {
+    box.textContent = p.text || '';
+    return;
+  }
+  // 先转义，再替换标记：‼ 是 ASCII 之外的单字符，直接 replace 即可
+  const safe = esc(raw);
+  box.innerHTML = safe.replace(/‼([^‼]*)‼/g, '<em class="stress">$1</em>');
+}
+
 function selectPassage(p) {
   state.current = p;
-  const isImp = (state.catalog.imprompt || []).some((x) => x.id === p.id);
+  const isImp = p.imprompt || (state.catalog.imprompt || []).some((x) => x.id === p.id);
   const grp = Object.entries(state.catalog.groups).find(([, g]) => g.items.some((x) => x.id === p.id));
   $('#crumb').textContent = grp ? `${grp[1].name} / ${isImp ? '即兴' : '朗读'}` : '';
   $('#title').textContent = p.title;
   $('#focus').textContent = p.focus || '';
   $('#tips').textContent = p.tips ? '💡 ' + p.tips : '';
   const box = $('#textbox');
-  box.textContent = p.text || '';
-  box.classList.toggle('empty', !p.text);
+  // 即兴题的 text 是"要讲的话题/任务"，不是朗读稿：照常显示，但视觉上要区分，
+  // 否则用户会以为是让他照着念。
+  box.textContent = p.text || p.task || '';
+  box.classList.toggle('empty', !(p.text || p.task));
+  box.classList.toggle('prompt', !!isImp);
+  if (!isImp) renderMarkedText(box, p);
   renderDrill(p);
   $('#result').classList.add('hidden');
   $('#badge').querySelector('b').textContent = '--';
   $('#badge').querySelector('b').style.color = '';
+  // 即兴题带建议时限就同步过去，省得用户手动选
+  if (isImp && p.seconds) {
+    const sel = $('#timelimit');
+    if (sel) sel.value = String(p.seconds);
+  }
   renderList();
 }
 
@@ -266,10 +390,26 @@ async function startRecording() {
   src.connect(proc); proc.connect(ctx.destination);
   state.rec = { ctx, dev, src, proc, chunks, sr: ctx.sampleRate };
   state.recording = true;
+  state.limitHit = false;
+  state.limit = parseInt(($('#timelimit') || {}).value || '0', 10) || 0;
   state.t0 = performance.now();
   state.timer = setInterval(() => {
     const s = (performance.now() - state.t0) / 1000;
     $('#clock').textContent = fmt(s);
+    // 限时模式：显示剩余时间，到点自动停。这是「限时即兴」的压力来源，
+    // 没有倒计时人会无限期地"准备一下"。
+    const cd = $('#countdown');
+    if (state.limit > 0 && cd) {
+      const left = state.limit - s;
+      cd.textContent = left > 0 ? `还剩 ${Math.ceil(left)} 秒` : '时间到';
+      cd.classList.toggle('warn', left <= 5 && left > 0);
+      if (left <= 0 && !state.limitHit) {
+        state.limitHit = true;
+        toast('时间到，自动停止并分析');
+        stopAndAnalyze();
+        return;
+      }
+    }
     if (s > 180) stopAndAnalyze();   // 3 分钟上限，避免一录录半天
   }, 250);
   $('#rec').textContent = '● 录音中…';
@@ -290,6 +430,8 @@ function stopRecording() {
   $('#rec').textContent = '● 开始录音';
   $('#rec').classList.remove('on');
   $('#stop').disabled = true;
+  const cd = $('#countdown');
+  if (cd) { cd.textContent = ''; cd.classList.remove('warn'); }
   if (!total) return null;
   const pcm = new Float32Array(total);
   let o = 0;
@@ -673,7 +815,10 @@ function stopAndAnalyze(b) {
   const blob = b || stopRecording();
   if (!blob) return;
   const p = state.current || {};
-  const isImp = (state.catalog.imprompt || []).some((x) => x.id === p.id);
+  // 即兴判定：素材自带的 imprompt 标记（今日一题）优先，
+  // 其次才去 catalog 里按 id 找——否则「今日一题」会被当成朗读稿去比对逐字稿。
+  const isImp = !!p.imprompt
+    || (state.catalog.imprompt || []).some((x) => x.id === p.id);
   analyzeBlob(blob, p, isImp ? 'imprompt' : 'read');
 }
 $('#demo').onclick = async () => {

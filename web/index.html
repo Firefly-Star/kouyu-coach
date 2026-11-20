@@ -32,10 +32,15 @@
       </div>
     </section>
 
+    <h2>今日一题</h2>
+    <p class="dim-note">每天换一道。同一题可以反复练到满意，第二天自动换下一道。</p>
+    <div id="daily" class="daily-card"></div>
+
     <h2>六个维度</h2>
     <div id="dims" class="dim-grid"></div>
 
     <h2>四阶段路径</h2>
+    <p class="dim-note">每个阶段独立判定：练到哪就在哪，前面没过也不挡后面显示。</p>
     <div id="stages" class="stage-list"></div>
 
     <h2>每周节奏</h2>
@@ -82,9 +87,19 @@
           <option value="4.8">偏快 4.8</option>
         </select>
       </label>
+      <label class="rate-pick">限时
+        <select id="timelimit">
+          <option value="0" selected>不限</option>
+          <option value="30">30 秒</option>
+          <option value="45">45 秒</option>
+          <option value="60">60 秒</option>
+          <option value="90">90 秒</option>
+        </select>
+      </label>
       <span id="clock" class="clock">00:00</span>
     </div>
     <div class="metro-note" id="metroNote"></div>
+    <div class="countdown" id="countdown"></div>
 
     <div class="wave-wrap"><canvas id="wave" height="96"></canvas></div>
     <div id="result" class="result hidden"></div>

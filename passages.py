@@ -3,7 +3,11 @@
 
 每条素材的 `dim` 对应 plan.DIMENSIONS 的 key，练习页会按当前阶段自动推荐；
 也可以按分组直接浏览。改这个文件就能加自己的材料。
+
+重音标记用 ‼ 包住（如 ‼重点‼），前端渲染成高亮，
+`text` 字段在导入时已经去掉标记，`text_raw` 保留原文。
 """
+from analyzer import strip_marks
 
 # ---------------------------------------------------------------- 气息
 BREATH = [
@@ -182,6 +186,11 @@ IMPROMPT = [
     },
 ]
 
+# ---------------------------------------------------------------- 扩充分组
+# 绕口令 / 播音基本功 / 晨读短文放在 passages_extra.py，
+# 这里只是汇入，避免单文件过长。
+from passages_extra import TONGUE_TWISTER, BROADCAST, MORNING_READ  # noqa: E402
+
 GROUPS = {
     "breath": {"name": "气息", "items": BREATH},
     "onset": {"name": "起音", "items": ONSET},
@@ -189,10 +198,19 @@ GROUPS = {
     "pace": {"name": "语速", "items": PACE},
     "prosody": {"name": "语调", "items": PROSODY},
     "clarity": {"name": "字音", "items": CLARITY},
+    "twister": {"name": "绕口令", "items": TONGUE_TWISTER},
+    "broadcast": {"name": "播音基本功", "items": BROADCAST},
+    "morning": {"name": "晨读短文", "items": MORNING_READ},
     "structure": {"name": "即兴", "items": IMPROMPT},
 }
 
-ALL_READ = BREATH + ONSET + FLOW + PACE + PROSODY + CLARITY
+ALL_READ = (BREATH + ONSET + FLOW + PACE + PROSODY + CLARITY
+            + TONGUE_TWISTER + BROADCAST + MORNING_READ)
+
+# 生成"干净"文本（去掉重音标记）供前端显示；原文保留在 text_raw
+for _p in ALL_READ + IMPROMPT:
+    _p["text_raw"] = _p.get("text") or ""
+    _p["text"] = strip_marks(_p["text_raw"])
 
 CATALOG = {
     "groups": {k: {"name": v["name"], "items": v["items"]} for k, v in GROUPS.items()},
