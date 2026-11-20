@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>口语训练台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">口语训练台<span>本地 · 离线 · 不联网</span></div>
+  <nav class="nav">
+    <button class="navbtn active" data-view="plan">训练计划</button>
+    <button class="navbtn" data-view="practice">开始练习</button>
+    <button class="navbtn" data-view="progress">进度</button>
+  </nav>
+  <div class="head-right"><span id="mici">检查麦克风…</span></div>
+</header>
+
+<!-- ============================================================ 训练计划 -->
+<main id="view-plan" class="view active">
+  <div class="plan-wrap">
+    <section class="plan-hero">
+      <h1>把“说话卡壳”拆成六件事，一次改一件</h1>
+      <p class="lede">口语表达不是一种能力，是六种可测量的能力叠在一起。
+        哪一项弱，听感就会卡在哪一处。这个计划按“先地基、后表达”的顺序排，
+        每个阶段都有明确的通过条件，不是练够天数就算过。</p>
+      <div class="hero-meta">
+        <span id="planStage" class="stage-chip">尚未开始</span>
+        <span id="planMeta" class="dim-note">录第一条练习就会自动算出你该从哪个阶段开始</span>
+        <button class="btn primary" data-goto="practice">开始第一练</button>
+      </div>
+    </section>
+
+    <h2>六个维度</h2>
+    <div id="dims" class="dim-grid"></div>
+
+    <h2>四阶段路径</h2>
+    <div id="stages" class="stage-list"></div>
+
+    <h2>每周节奏</h2>
+    <p class="dim-note">不用每天练全部。按这张表轮换，周日只复测、不学新的。</p>
+    <div id="rhythm" class="rhythm"></div>
+  </div>
+</main>
+
+<!-- ============================================================ 练习 -->
+<main id="view-practice" class="view">
+  <aside>
+    <div class="aside-head">
+      <span id="focusLabel">当前重点</span>
+      <button class="link" id="showAll">看全部</button>
+    </div>
+    <div id="list" class="list"></div>
+  </aside>
+
+  <section class="stage">
+    <div class="stage-head">
+      <div>
+        <div class="crumb" id="crumb"></div>
+        <h1 id="title">选一个练习开始</h1>
+        <p id="focus" class="focus"></p>
+      </div>
+      <div class="score-badge" id="badge"><b>--</b><span>总分</span></div>
+    </div>
+
+    <div id="drill" class="drill hidden"></div>
+
+    <div id="textbox" class="textbox empty">朗读稿会显示在这里。</div>
+    <div class="tips" id="tips"></div>
+
+    <div class="controls">
+      <button id="rec" class="rec">● 开始录音</button>
+      <button id="stop" class="stop" disabled>■ 停止并分析</button>
+      <button id="tts" class="ghost">🔊 听示范</button>
+      <button id="metro" class="ghost">🥁 节拍器</button>
+      <button id="demo" class="demo">先看示例报告</button>
+      <label class="rate-pick">目标语速
+        <select id="target">
+          <option value="3.6">偏慢 3.6</option>
+          <option value="4.2" selected>常规 4.2</option>
+          <option value="4.8">偏快 4.8</option>
+        </select>
+      </label>
+      <span id="clock" class="clock">00:00</span>
+    </div>
+    <div class="metro-note" id="metroNote"></div>
+
+    <div class="wave-wrap"><canvas id="wave" height="96"></canvas></div>
+    <div id="result" class="result hidden"></div>
+  </section>
+</main>
+
+<!-- ============================================================ 进度 -->
+<main id="view-progress" class="view">
+  <div class="plan-wrap">
+    <h1>进度</h1>
+    <p class="lede" id="progLede">还没有练习记录。录一条之后，这里会显示六个维度的趋势。</p>
+    <div id="progDims" class="dim-grid"></div>
+    <h2>最近练习</h2>
+    <div id="progHist"></div>
+  </div>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

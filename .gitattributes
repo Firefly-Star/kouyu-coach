@@ -1,0 +1,7 @@
+# 归一化换行符，避免 Windows 上提交后 diff 全是行尾变化
+* text=auto eol=lf
+
+# 二进制，别碰
+*.wav binary
+*.png binary
+*.jpg binary

@@ -1,0 +1,17 @@
+# 编译产物
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 回归脚本的输出
+test_report.txt
+
+# 个人录音：只留在本机，不进版本库
+history/*
+!history/.gitkeep
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
