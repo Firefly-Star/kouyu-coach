@@ -289,13 +289,26 @@ class Handler(BaseHTTPRequestHandler):
                                     "error": "分析时出错了（%s），请重录一条再试。" % type(e).__name__})
 
 
+class _Server(ThreadingHTTPServer):
+    # HTTPServer 默认 allow_reuse_address=1，在 Windows 上会让第二个进程
+    # 也能"绑定"同一端口，于是旧进程继续接走请求——改了代码却不生效，
+    # 排查起来极其费时。这里显式关掉，重复启动会直接报错而不是静默并存。
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def make_server(port=None):
     """建一个已经绑好端口的服务实例；desktop.py 打包后用这个。"""
-    return ThreadingHTTPServer((HOST, int(port or PORT)), Handler)
+    return _Server((HOST, int(port or PORT)), Handler)
 
 
 def main():
-    srv = make_server()
+    try:
+        srv = make_server()
+    except OSError as e:
+        print("端口 %d 已被占用（多半是上一次的服务还在跑）。" % PORT)
+        print("请先关闭它，或换个端口：set KOUYU_PORT=8900 再运行。（%s）" % e)
+        raise SystemExit(1)
     print("中文口语表达训练器已启动： http://%s:%d" % (HOST, PORT))
     print("按 Ctrl+C 停止")
     try:

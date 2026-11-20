@@ -87,16 +87,27 @@ def main():
     os.environ["KOUYU_SAMPLES"] = os.path.join(res, "samples")
     os.environ["KOUYU_HISTORY"] = os.path.join(dat, "history")
 
-    # 单实例：先看是不是已经有一个自己在跑（是就直接开浏览器，不起第二个）
-    existing = find_existing()
-    if existing:
-        url = "http://127.0.0.1:%d" % existing
-        print("口语训练台已经在运行：%s" % url)
-        webbrowser.open(url)
-        return
+    # 用户显式指定了端口就尊重它（要跑第二个实例做对比时用得上，
+    # 比如一边放稳定版、一边试用开发版）；没指定才走“单实例”逻辑。
+    forced = os.environ.get("KOUYU_PORT")
+    if forced:
+        port = int(forced)
+        # 指定端口上已经是本程序：直接开浏览器，不重复起
+        if already_running(port):
+            url = "http://127.0.0.1:%d" % port
+            print("口语训练台已经在运行：%s" % url)
+            webbrowser.open(url)
+            return
+    else:
+        # 单实例：先看是不是已经有一个自己在跑（是就直接开浏览器，不起第二个）
+        existing = find_existing()
+        if existing:
+            url = "http://127.0.0.1:%d" % existing
+            print("口语训练台已经在运行：%s" % url)
+            webbrowser.open(url)
+            return
+        port = pick_port("127.0.0.1")
 
-    # 没在跑：用指定端口，或挑一个空闲的
-    port = int(os.environ.get("KOUYU_PORT") or pick_port("127.0.0.1"))
     os.environ["KOUYU_PORT"] = str(port)
     url = "http://127.0.0.1:%d" % port
 
