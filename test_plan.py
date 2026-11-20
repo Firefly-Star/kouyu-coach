@@ -92,6 +92,28 @@ for key in ("twister", "broadcast", "morning"):
     n = len(passages.GROUPS[key]["items"])
     check(n >= 5, "分组 %s 有 %d 条 >= 5" % (key, n))
 
+print("\n== 7. evaluate() 的输出必须能被前端直接消费 ==")
+# 这条是补漏：plan.evaluate 改成按阶段独立判定后，
+# server.plan_progress 忘了把 stages 字段传出去，页面就拿不到逐阶段结论。
+# 光测 plan.evaluate 本身发现不了——问题出在"传出去"这一层。
+ev = plan.evaluate({"breath": 90, "onset": 90})
+for field in ("stages", "stages_passed", "ready", "weak", "stage", "stage_name", "all_done"):
+    check(field in ev, "evaluate 返回里含 %s" % field)
+check(isinstance(ev.get("stages"), list) and len(ev["stages"]) == len(plan.STAGES),
+      "stages 覆盖全部 %d 个阶段" % len(plan.STAGES))
+if ev.get("stages"):
+    row = ev["stages"][0]
+    for field in ("id", "name", "passed", "missing"):
+        check(field in row, "阶段行含 %s" % field)
+
+# 真正走一遍 server 的组装逻辑，确认字段到得了前端
+import server
+prog = server.plan_progress()
+for field in ("stages", "stages_passed"):
+    check(field in prog, "plan_progress 返回里含 %s" % field)
+check(isinstance(prog.get("stages"), list) and len(prog["stages"]) == len(plan.STAGES),
+      "plan_progress.stages 覆盖全部阶段（无数据时也要有结构）")
+
 print()
 if FAILS:
     print("失败 %d 项：" % len(FAILS))

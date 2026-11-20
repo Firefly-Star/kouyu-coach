@@ -108,6 +108,12 @@ def plan_progress():
     ev = plan.evaluate(dims_last) if dims_last else {
         "stage": plan.STAGES[0]["id"], "stage_name": plan.STAGES[0]["name"],
         "ready": [], "weak": [], "all_done": False,
+        # 没数据时也要给出"未达标"的结构，前端才能统一渲染
+        "stages": [{"id": s["id"], "name": s["name"], "passed": False,
+                    "missing": [{"key": k, "value": None, "target": t}
+                                for k, t in s["pass"].items()]}
+                   for s in plan.STAGES],
+        "stages_passed": [],
     }
     # 本周练习天数（按录音日期去重）
     days = sorted({(r.get("time") or "")[:10] for r in rows if r.get("time")}, reverse=True)
@@ -118,6 +124,10 @@ def plan_progress():
         "stages_done": ev["all_done"],
         "current_stage": ev["stage"],
         "current_stage_name": ev["stage_name"],
+        # 每个阶段的独立判定结果：页面上逐阶段显示「已达标」，而不是
+        # 只显示「第一个未达标」——否则后面阶段的进度完全看不见。
+        "stages": ev.get("stages", []),
+        "stages_passed": ev.get("stages_passed", []),
         "ready": ev["ready"],
         "weak": ev["weak"],
         "sessions": len(rows),
