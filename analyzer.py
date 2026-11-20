@@ -24,9 +24,20 @@ CLAUSE_END = "，,、：:"
 
 # ---------------------------------------------------------------- 音频读取
 def read_wav(data: bytes):
-    with wave.open(io.BytesIO(data), "rb") as w:
-        nch, sw, sr, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
-        raw = w.readframes(n)
+    """解析 WAV。损坏/截断/非 WAV 的字节一律抬 ValueError，
+    由 analyze() 转成可读的错误信息——不能让它抛 EOFError 变成 500。"""
+    if not data or len(data) < 44:
+        raise ValueError("音频太短（%d 字节），可能没录上声音" % len(data or b""))
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("不是有效的 WAV 音频（浏览器录音失败？请重试）")
+    try:
+        with wave.open(io.BytesIO(data), "rb") as w:
+            nch, sw, sr, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+            raw = w.readframes(n)
+    except (EOFError, wave.Error, OSError) as e:
+        raise ValueError("音频文件不完整或已损坏（%s）" % type(e).__name__)
+    if not raw:
+        raise ValueError("音频里没有任何采样数据")
     if sw == 2:
         x = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     elif sw == 1:
@@ -34,9 +45,12 @@ def read_wav(data: bytes):
     elif sw == 4:
         x = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
     else:
-        raise ValueError("unsupported sample width %d" % sw)
+        raise ValueError("不支持的位深 %d bit" % (sw * 8))
+    if nch < 1:
+        raise ValueError("声道数异常")
     if nch > 1:
-        x = x.reshape(-1, nch).mean(axis=1)
+        usable = len(x) - len(x) % nch
+        x = x[:usable].reshape(-1, nch).mean(axis=1)
     if sr != SR:
         tgt = int(round(len(x) * SR / float(sr)))
         x = np.interp(np.linspace(0, len(x) - 1, tgt, dtype=np.float64),
@@ -309,7 +323,16 @@ def _semi(v, ref):
 
 def analyze(wav_bytes, text=None, target_rate=4.2):
     has_text = bool(text and text.strip())
-    x = read_wav(wav_bytes)
+    # 坏音频一律走“结构化错误”而不是抛异常：前端只认 {ok:false,error}，
+    # 抛出去会变成 500 + traceback，用户只看到“分析失败：EOFError”。
+    try:
+        x = read_wav(wav_bytes)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:                    # 兜底：解码库抛什么都别让它冒到 HTTP 层
+        return {"ok": False, "error": "音频解析失败（%s）" % type(e).__name__}
+    if len(x) < SR * 0.3:
+        return {"ok": False, "error": "录音太短（不到 0.3 秒），请按素材正常念一句再停。"}
     total_dur = len(x) / float(SR)
     mask, db = vad(x)
     segs = trim_artifacts(segments(mask))

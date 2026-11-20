@@ -14,8 +14,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WEB = os.path.join(HERE, "web")
-HIST = os.path.join(HERE, "history")
+# 三个目录都可以用环境变量覆盖：
+# 打包成 exe 后，web/ 和 samples/ 在 PyInstaller 的解包临时目录里，
+# 而 history/ 必须在 exe 同级的可写目录下，否则关掉程序录音就没了。
+WEB = os.environ.get("KOUYU_WEB") or os.path.join(HERE, "web")
+HIST = os.environ.get("KOUYU_HISTORY") or os.path.join(HERE, "history")
+SAMPLES = os.environ.get("KOUYU_SAMPLES") or os.path.join(HERE, "samples")
 os.makedirs(HIST, exist_ok=True)
 sys.path.insert(0, HERE)
 
@@ -220,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if p == "/api/demo":
                 # 用内置样例音频走一遍完整流程，方便先看报告长什么样
-                fp = os.path.join(HERE, "samples", "demo.wav")
+                fp = os.path.join(SAMPLES, "demo.wav")
                 if not os.path.isfile(fp):
                     return self._json(404, {"error": "缺少 samples/demo.wav"})
                 return self._audio(fp)
@@ -279,18 +283,27 @@ class Handler(BaseHTTPRequestHandler):
             result["trial"] = trial
             return self._json(200, result)
         except Exception as e:
+            # traceback 只写进服务端日志，不回给浏览器；用户看到的是人话。
             traceback.print_exc()
-            return self._json(500, {"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
+            return self._json(500, {"ok": False,
+                                    "error": "分析时出错了（%s），请重录一条再试。" % type(e).__name__})
+
+
+def make_server(port=None):
+    """建一个已经绑好端口的服务实例；desktop.py 打包后用这个。"""
+    return ThreadingHTTPServer((HOST, int(port or PORT)), Handler)
 
 
 def main():
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    srv = make_server()
     print("中文口语表达训练器已启动： http://%s:%d" % (HOST, PORT))
     print("按 Ctrl+C 停止")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止")
+    finally:
+        srv.server_close()
 
 
 if __name__ == "__main__":
