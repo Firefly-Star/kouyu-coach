@@ -234,8 +234,11 @@ python test_analyzer.py     # 跑一遍，看六个用例的分数是否落在�
 
 用 faster-whisper 在本机跑，音频不经过任何网络。
 
-`powershell
-pip install faster-whisper        # 第一次运行会自动下载 base 模型（约 140MB）
+**注意：打包好的 exe 里不含 whisper**（体积会从 66MB 涨到 246MB，且当前打包后加载不成功）。
+用 exe 时要内容分析，请改用源码运行并自行安装：
+
+```powershell
+pip install faster-whisper        # 第一次运行会自动下载 base 模型（约 140MB）```
 `
 
 没装的话这个开关会自动隐藏——不会给你一个点了必然失败的东西。

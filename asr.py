@@ -22,14 +22,26 @@ _LOCK = threading.Lock()
 _MODEL = None
 _MODEL_SIZE = os.environ.get("KOUYU_WHISPER_MODEL", "base")
 _STATUS = {"state": "idle", "error": None}
+# 最近一次导入 faster_whisper 失败的原因。打包后排错全靠它，
+# 不然 available() 只会告诉你 False，不告诉你为什么。
+_IMPORT_ERROR = None
 
 
 def available():
-    """faster-whisper 装了吗？（只查包，不加载模型）"""
+    """faster-whisper 装了吗？（只查包，不加载模型）
+
+    导入失败的**原因要留住**：原来这里 except 一句 pass，
+    结果打包后 available() 返回 False，但没人知道为什么——
+    是没装？还是缺 dll？还是循环导入？排错时全靠猜。
+    现在把异常信息存进 _IMPORT_ERROR，status() 会带出来。
+    """
+    global _IMPORT_ERROR
     try:
         import faster_whisper  # noqa: F401
+        _IMPORT_ERROR = None
         return True
-    except Exception:
+    except Exception as e:
+        _IMPORT_ERROR = "%s: %s" % (type(e).__name__, e)
         return False
 
 
@@ -41,6 +53,7 @@ def status():
         "loaded": _MODEL is not None,
         "state": _STATUS["state"],
         "error": _STATUS["error"],
+        "import_error": _IMPORT_ERROR,
     }
     return d
 
